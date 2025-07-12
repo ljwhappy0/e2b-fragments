@@ -27,6 +27,8 @@ export function ChatInput({
   files,
   handleFileChange,
   children,
+  showPrototypeButton,
+  onGeneratePrototype,
 }: {
   retry: () => void
   isErrored: boolean
@@ -41,6 +43,8 @@ export function ChatInput({
   files: File[]
   handleFileChange: (change: SetStateAction<File[]>) => void
   children: React.ReactNode
+  showPrototypeButton?: boolean
+  onGeneratePrototype?: () => void
 }) {
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
     handleFileChange((prev) => {
@@ -170,6 +174,17 @@ export function ChatInput({
           >
             Try again
           </button>
+        </div>
+      )}
+      
+      {showPrototypeButton && (
+        <div className="flex justify-center mx-4 mb-4">
+          <Button
+            onClick={onGeneratePrototype}
+            className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white px-6 py-2 rounded-xl font-medium shadow-lg"
+          >
+            是否生成原型？
+          </Button>
         </div>
       )}
       <div className="relative">

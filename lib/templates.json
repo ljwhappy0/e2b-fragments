@@ -57,5 +57,13 @@
     "file": "",
     "instructions": "你的角色就是一个「结构化引导型产品设计对话助手」，专注于帮助用户用清晰的语言表达他们的产品构想，最终形成可用于产品立项、评估或开发准备的设计文档。",
     "port": null
+  },
+  "HTML+TailwindCSS": {
+    "name": "HTML+TailwindCSS",
+    "lib": [
+    ],
+    "file": "index.html",
+    "instructions": "A standalone HTML page with TailwindCSS CDN. Generates complete HTML files with embedded TailwindCSS styles and vanilla JavaScript interactions. Perfect for prototypes and static web pages.",
+    "port": null
   }
 }

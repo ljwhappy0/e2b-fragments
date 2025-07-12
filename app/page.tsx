@@ -47,6 +47,7 @@ export default function Home() {
   const [isRateLimited, setIsRateLimited] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [hasInitializedPM, setHasInitializedPM] = useState(false)
+  const [isPMDone, setIsPMDone] = useState(false)
   const { session, userTeam } = useAuth(setAuthDialog, setAuthView)
 
   const filteredModels = modelsList.models.filter((model) => {
@@ -186,6 +187,18 @@ export default function Home() {
     }
   }, [pmError])
 
+  // 检测PM模板是否完成
+  useEffect(() => {
+    if (isPMTemplate && pmMessages.length > 0) {
+      const lastMessage = pmMessages[pmMessages.length - 1]
+      if (lastMessage.role === 'assistant' && lastMessage.content.includes('<!-- PM-DONE -->')) {
+        setIsPMDone(true)
+      }
+    } else {
+      setIsPMDone(false)
+    }
+  }, [pmMessages, isPMTemplate])
+
   // 当切换到PM模板时，自动发送初始消息
   useEffect(() => {
     console.log('useEffect triggered:', { isPMTemplate, hasInitializedPM, session: !!session })
@@ -299,6 +312,44 @@ export default function Home() {
         config: languageModel,
       })
     }
+  }
+
+  // 生成原型处理函数
+  function handleGeneratePrototype() {
+    if (!session) {
+      return setAuthDialog(true)
+    }
+
+    // 切换到HTML+TailwindCSS模板
+    setSelectedTemplate('HTML+TailwindCSS')
+    
+    // 准备产品设计说明
+    const productSpec = pmMessages
+      .filter(msg => msg.role === 'assistant')
+      .map(msg => msg.content)
+      .join('\n\n')
+    
+    // 使用结构化生成API
+    submit({
+      userID: session?.user?.id,
+      teamID: userTeam?.id,
+      messages: [{
+        role: 'user',
+        content: `请根据以下产品设计文档生成一个HTML原型页面：\n\n${productSpec}`
+      }],
+      template: { 'HTML+TailwindCSS': templates['HTML+TailwindCSS'] },
+      model: currentModel,
+      config: languageModel,
+    })
+
+    setChatInput('')
+    setFiles([])
+    setCurrentTab('code')
+
+    posthog.capture('prototype_generated', {
+      template: 'HTML+TailwindCSS',
+      model: languageModel.model,
+    })
   }
 
   function addMessage(message: Message) {
@@ -421,6 +472,8 @@ export default function Home() {
             isMultiModal={currentModel?.multiModal || false}
             files={files}
             handleFileChange={handleFileChange}
+            showPrototypeButton={isPMTemplate && isPMDone}
+            onGeneratePrototype={handleGeneratePrototype}
           >
             <ChatPicker
               templates={templates}
