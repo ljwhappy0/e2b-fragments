@@ -17,7 +17,7 @@ import { supabase } from '@/lib/supabase'
 import templates, { TemplateId } from '@/lib/templates'
 import { ExecutionResult } from '@/lib/types'
 import { DeepPartial } from 'ai'
-import { experimental_useObject as useObject } from 'ai/react'
+import { experimental_useObject as useObject, useChat } from 'ai/react'
 import { usePostHog } from 'posthog-js/react'
 import { SetStateAction, useEffect, useState } from 'react'
 import { useLocalStorage } from 'usehooks-ts'
@@ -46,6 +46,7 @@ export default function Home() {
   const [authView, setAuthView] = useState<ViewType>('sign_in')
   const [isRateLimited, setIsRateLimited] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+  const [hasInitializedPM, setHasInitializedPM] = useState(false)
   const { session, userTeam } = useAuth(setAuthDialog, setAuthView)
 
   const filteredModels = modelsList.models.filter((model) => {
@@ -64,6 +65,46 @@ export default function Home() {
       : { [selectedTemplate]: templates[selectedTemplate] }
   const lastMessage = messages[messages.length - 1]
 
+  // 判断是否为PM模板
+  const isPMTemplate = selectedTemplate === 'PM'
+  console.log('Template state:', { selectedTemplate, isPMTemplate, hasInitializedPM })
+
+  // PM模板的纯聊天功能
+  const { messages: pmMessages, input: pmInput, handleInputChange: pmHandleInputChange, handleSubmit: pmHandleSubmit, isLoading: pmIsLoading, stop: pmStop, error: pmError } = useChat({
+    api: '/api/pm-chat',
+    streamProtocol: 'text',
+    experimental_prepareRequestBody: ({ messages }) => {
+      const body: any = {
+        messages: messages.map(msg => ({
+          role: msg.role,
+          content: msg.content,
+        })),
+        template: currentTemplate,
+        model: currentModel,
+        config: languageModel,
+      }
+      
+      if (session?.user?.id) body.userID = session.user.id
+      if (userTeam?.id) body.teamID = userTeam.id
+      
+      return body
+    },
+    onError: (error) => {
+      console.error('Error submitting PM request:', error)
+      if (error.message.includes('limit')) {
+        setIsRateLimited(true)
+      }
+      setErrorMessage(error.message)
+    },
+    onFinish: (message) => {
+      console.log('PM chat finished:', message)
+      posthog.capture('pm_chat_finished', {
+        template: 'PM',
+      })
+    },
+  })
+
+  // 其他模板的结构化生成功能
   const { object, submit, isLoading, stop, error } = useObject({
     api: '/api/chat',
     schema,
@@ -77,7 +118,6 @@ export default function Home() {
     },
     onFinish: async ({ object: fragment, error }) => {
       if (!error) {
-        // send it to /api/sandbox
         console.log('fragment', fragment)
         setIsPreviewLoading(true)
         posthog.capture('fragment_generated', {
@@ -136,6 +176,41 @@ export default function Home() {
     if (error) stop()
   }, [error])
 
+  useEffect(() => {
+    if (pmError) {
+      console.error('PM chat error:', pmError)
+      if (pmError.message.includes('limit')) {
+        setIsRateLimited(true)
+      }
+      setErrorMessage(pmError.message)
+    }
+  }, [pmError])
+
+  // 当切换到PM模板时，自动发送初始消息
+  useEffect(() => {
+    console.log('useEffect triggered:', { isPMTemplate, hasInitializedPM, session: !!session })
+    if (isPMTemplate && !hasInitializedPM && session) {
+      console.log('Attempting to initialize PM template...')
+      
+      // 使用useChat的handleSubmit来发送消息，这样响应会显示在聊天界面
+      const mockEvent = {
+        preventDefault: () => {},
+        currentTarget: {
+          checkValidity: () => true,
+          reportValidity: () => {}
+        }
+      } as any
+      
+      // 设置输入内容并提交
+      pmHandleInputChange({ target: { value: '你好' } } as any)
+      setTimeout(() => {
+        pmHandleSubmit(mockEvent)
+        setHasInitializedPM(true)
+        console.log('PM template initialized with initial message')
+      }, 100)
+    }
+  }, [isPMTemplate, hasInitializedPM, session, pmHandleSubmit, pmHandleInputChange])
+
   function setMessage(message: Partial<Message>, index?: number) {
     setMessages((previousMessages) => {
       const updatedMessages = [...previousMessages]
@@ -155,52 +230,75 @@ export default function Home() {
       return setAuthDialog(true)
     }
 
-    if (isLoading) {
-      stop()
-    }
+    // 根据模板类型选择不同的处理方式
+    if (isPMTemplate) {
+      // PM模板使用纯聊天
+      if (pmIsLoading) {
+        pmStop()
+      }
+      
+      // 直接使用PM聊天的handleSubmit
+      pmHandleSubmit(e)
+      
+      posthog.capture('chat_submit', {
+        template: 'PM',
+        model: languageModel.model,
+      })
+    } else {
+      // 其他模板使用结构化生成
+      if (isLoading) {
+        stop()
+      }
 
-    const content: Message['content'] = [{ type: 'text', text: chatInput }]
-    const images = await toMessageImage(files)
+      const content: Message['content'] = [{ type: 'text', text: chatInput }]
+      const images = await toMessageImage(files)
 
-    if (images.length > 0) {
-      images.forEach((image) => {
-        content.push({ type: 'image', image })
+      if (images.length > 0) {
+        images.forEach((image) => {
+          content.push({ type: 'image', image })
+        })
+      }
+
+      const updatedMessages = addMessage({
+        role: 'user',
+        content,
+      })
+
+      submit({
+        userID: session?.user?.id,
+        teamID: userTeam?.id,
+        messages: toAISDKMessages(updatedMessages),
+        template: currentTemplate,
+        model: currentModel,
+        config: languageModel,
+      })
+
+      setChatInput('')
+      setFiles([])
+      setCurrentTab('code')
+
+      posthog.capture('chat_submit', {
+        template: selectedTemplate,
+        model: languageModel.model,
       })
     }
-
-    const updatedMessages = addMessage({
-      role: 'user',
-      content,
-    })
-
-    submit({
-      userID: session?.user?.id,
-      teamID: userTeam?.id,
-      messages: toAISDKMessages(updatedMessages),
-      template: currentTemplate,
-      model: currentModel,
-      config: languageModel,
-    })
-
-    setChatInput('')
-    setFiles([])
-    setCurrentTab('code')
-
-    posthog.capture('chat_submit', {
-      template: selectedTemplate,
-      model: languageModel.model,
-    })
   }
 
   function retry() {
-    submit({
-      userID: session?.user?.id,
-      teamID: userTeam?.id,
-      messages: toAISDKMessages(messages),
-      template: currentTemplate,
-      model: currentModel,
-      config: languageModel,
-    })
+    if (isPMTemplate) {
+      // PM模板重试逻辑
+      pmHandleSubmit(new Event('submit') as any)
+    } else {
+      // 其他模板重试逻辑
+      submit({
+        userID: session?.user?.id,
+        teamID: userTeam?.id,
+        messages: toAISDKMessages(messages),
+        template: currentTemplate,
+        model: currentModel,
+        config: languageModel,
+      })
+    }
   }
 
   function addMessage(message: Message) {
@@ -239,14 +337,28 @@ export default function Home() {
   }
 
   function handleClearChat() {
-    stop()
-    setChatInput('')
-    setFiles([])
-    setMessages([])
-    setFragment(undefined)
-    setResult(undefined)
-    setCurrentTab('code')
-    setIsPreviewLoading(false)
+    if (isPMTemplate) {
+      // PM模板清除聊天
+      pmStop()
+      setChatInput('')
+      setFiles([])
+      setMessages([])
+      setFragment(undefined)
+      setResult(undefined)
+      setCurrentTab('code')
+      setIsPreviewLoading(false)
+      setHasInitializedPM(false) // 重置PM初始化状态
+    } else {
+      // 其他模板清除聊天
+      stop()
+      setChatInput('')
+      setFiles([])
+      setMessages([])
+      setFragment(undefined)
+      setResult(undefined)
+      setCurrentTab('code')
+      setIsPreviewLoading(false)
+    }
   }
 
   function setCurrentPreview(preview: {
@@ -286,20 +398,25 @@ export default function Home() {
             canUndo={messages.length > 1 && !isLoading}
             onUndo={handleUndo}
           />
-          <Chat
-            messages={messages}
-            isLoading={isLoading}
-            setCurrentPreview={setCurrentPreview}
-          />
+                  <Chat
+          messages={isPMTemplate ? pmMessages
+            .filter(msg => msg.role === 'user' || msg.role === 'assistant')
+            .map(msg => ({
+              role: msg.role as 'user' | 'assistant',
+              content: [{ type: 'text' as const, text: msg.content }],
+            })) : messages}
+          isLoading={isLoading || pmIsLoading}
+          setCurrentPreview={setCurrentPreview}
+        />
           <ChatInput
             retry={retry}
-            isErrored={error !== undefined}
+            isErrored={error !== undefined || pmError !== undefined}
             errorMessage={errorMessage}
-            isLoading={isLoading}
+            isLoading={isLoading || pmIsLoading}
             isRateLimited={isRateLimited}
-            stop={stop}
-            input={chatInput}
-            handleInputChange={handleSaveInputChange}
+            stop={isPMTemplate ? pmStop : stop}
+            input={isPMTemplate ? pmInput : chatInput}
+            handleInputChange={isPMTemplate ? pmHandleInputChange : handleSaveInputChange}
             handleSubmit={handleSubmitAuth}
             isMultiModal={currentModel?.multiModal || false}
             files={files}

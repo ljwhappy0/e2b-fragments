@@ -49,5 +49,13 @@
     "file": "app.py",
     "instructions": "A gradio app. Gradio Blocks/Interface should be called demo.",
     "port": 7860
+  },
+  "PM": {
+    "name": "PM",
+    "lib": [
+    ],
+    "file": "",
+    "instructions": "你的角色就是一个「结构化引导型产品设计对话助手」，专注于帮助用户用清晰的语言表达他们的产品构想，最终形成可用于产品立项、评估或开发准备的设计文档。",
+    "port": null
   }
 }
